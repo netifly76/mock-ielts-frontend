@@ -3546,7 +3546,61 @@ Matn ustida sichqonchaning o'ng tugmasini bosib, o'sha joyga bo'sh joy qo'shing
       );
     }
 
+/* Qalin (bold) — faol matn maydonida belgilangan matnni **...** bilan o'raydi (qayta bosilsa — olib tashlaydi).
+       React'ning onChange'i ishlashi uchun qiymat native setter orqali yoziladi va "input" hodisasi yuboriladi. */
+    function boldActiveTextField(fallbackEl) {
+      const isTextField = (el) => !!el && (el.tagName === "TEXTAREA" || (el.tagName === "INPUT" && (!el.type || el.type === "text" || el.type === "search")));
+      const active = document.activeElement;
+      const el = isTextField(active) ? active : (isTextField(fallbackEl) && document.contains(fallbackEl) ? fallbackEl : null);
+      if (!el) return false;
+      const value = el.value || "";
+      let start = el.selectionStart;
+      let end = el.selectionEnd;
+      if (start == null || end == null) { start = value.length; end = value.length; }
+      let next, cs, ce;
+      if (start === end) {
+        next = value.slice(0, start) + "**qalin matn**" + value.slice(end);
+        cs = start + 2;
+        ce = cs + "qalin matn".length;
+      } else if (start >= 2 && value.slice(start - 2, start) === "**" && value.slice(end, end + 2) === "**") {
+        next = value.slice(0, start - 2) + value.slice(start, end) + value.slice(end + 2);
+        cs = start - 2;
+        ce = end - 2;
+      } else {
+        const segs = value.slice(start, end).split("_____");
+        const cores = segs.map((sg) => /^(\s*)([\s\S]*?)(\s*)$/.exec(sg));
+        const texts = cores.filter((m) => m[2]);
+        if (!texts.length) return false;
+        const allBold = texts.every((m) => m[2].length >= 4 && m[2].startsWith("**") && m[2].endsWith("**"));
+        const wrapped = cores.map((m) => (m[2] ? m[1] + (allBold ? m[2].slice(2, -2) : "**" + m[2] + "**") + m[3] : m[0])).join("_____");
+        next = value.slice(0, start) + wrapped + value.slice(end);
+        cs = start;
+        ce = start + wrapped.length;
+      }
+      const proto = el.tagName === "TEXTAREA" ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+      Object.getOwnPropertyDescriptor(proto, "value").set.call(el, next);
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+      const restore = () => { try { el.focus(); el.setSelectionRange(cs, ce); } catch (e) { /* ignore */ } };
+      restore();
+      requestAnimationFrame(restore);
+      return true;
+    }
+
     function ExamForm({ groups, initialExam, onCancel, onSave, toast }) {
+      const lastFieldRef = useRef(null);
+      useEffect(() => {
+        const isTextField = (t) => !!t && (t.tagName === "TEXTAREA" || (t.tagName === "INPUT" && (!t.type || t.type === "text" || t.type === "search")));
+        const onFocusIn = (e) => { if (isTextField(e.target)) lastFieldRef.current = e.target; };
+        const onKeyDown = (e) => {
+          if ((e.ctrlKey || e.metaKey) && (e.key === "b" || e.key === "B") && isTextField(e.target)) {
+            e.preventDefault();
+            boldActiveTextField(e.target);
+          }
+        };
+        document.addEventListener("focusin", onFocusIn);
+        document.addEventListener("keydown", onKeyDown);
+        return () => { document.removeEventListener("focusin", onFocusIn); document.removeEventListener("keydown", onKeyDown); };
+      }, []);
       const isEdit = !!initialExam;
       const [title, setTitle] = useState(initialExam?.title || "");
       const [examType, setExamType] = useState(initialExam?.examType || "academic");
@@ -4452,6 +4506,14 @@ const addPart = () => setSections((s) => ({ ...s, listening: { ...s.listening, p
 
           <div className="flex justify-end gap-2 pt-1">
             <Button variant="ghost" onClick={onCancel}>Bekor qilish</Button>
+<button
+              type="button"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => boldActiveTextField(lastFieldRef.current)}
+              title="Belgilangan matnni qalinlashtirish (Ctrl+B)"
+              className="inline-flex items-center justify-center gap-1.5 rounded-lg px-3 h-9 text-[13px] transition-opacity hover:opacity-70"
+              style={{ order: -1, border: `1px solid ${C.border}`, backgroundColor: C.card, color: C.text }}
+            ><b>B</b> Qalinlashtirish</button>
             <Button onClick={submit} loading={saving} icon="check">{isEdit ? "Saqlash" : "Exam yaratish"}</Button>
           </div>
         </div>
@@ -5668,7 +5730,7 @@ const addPart = () => setSections((s) => ({ ...s, listening: { ...s.listening, p
               <div key={p.id} className="text-[12px]" style={{ color: C.text }}>
                 <span className="font-bold" style={{ color: C.tealDeep }}>{p.label}</span>
                 {" — "}
-                <span style={{ color: C.mutedSoft }}>{(p.text || "").trim().slice(0, 40) || "(bo'sh)"}{(p.text || "").length > 40 ? "…" : ""}</span>
+                <span style={{ color: C.mutedSoft }}>{(p.text || "").replace(/\*\*/g, "").trim().slice(0, 40) || "(bo'sh)"}{(p.text || "").replace(/\*\*/g, "").length > 40 ? "…" : ""}</span>
               </div>
             ))}
           </div>
@@ -5676,7 +5738,29 @@ const addPart = () => setSections((s) => ({ ...s, listening: { ...s.listening, p
       );
     }
 
-    function HighlightablePassage({ text }) {
+function parseBoldMarkup(raw) {
+      const src = String(raw || "");
+      let plain = "";
+      const ranges = [];
+      const points = [];
+      const re = /\*\*([^*]+)\*\*/g;
+      let last = 0;
+      let m;
+      while ((m = re.exec(src))) {
+        plain += src.slice(last, m.index);
+        const a = plain.length;
+        plain += m[1];
+        ranges.push([a, plain.length]);
+        points.push(a, plain.length);
+        last = m.index + m[0].length;
+      }
+      plain += src.slice(last);
+      return { plain, ranges, points };
+    }
+
+    function HighlightablePassage({ text: rawPassageText }) {
+      const bold = useMemo(() => parseBoldMarkup(rawPassageText), [rawPassageText]);
+      const text = bold.plain;
       const [highlights, setHighlights] = useState([]); // array of {id,start,end}
       const [selBtn, setSelBtn] = useState(null); // {x,y,start,end} floating "Highlight" button
       const containerRef = useRef(null);
@@ -5716,17 +5800,17 @@ const addPart = () => setSections((s) => ({ ...s, listening: { ...s.listening, p
       const removeHighlight = (id) => setHighlights((h) => h.filter((x) => x.id !== id));
 
       const segments = useMemo(() => {
-        const points = new Set([0, text.length]);
+const points = new Set([0, text.length, ...bold.points]);
         highlights.forEach((h) => { points.add(h.start); points.add(h.end); });
         const sorted = [...points].sort((a, b) => a - b);
         const segs = [];
         for (let i = 0; i < sorted.length - 1; i++) {
           const s = sorted[i], e = sorted[i + 1];
           const hi = highlights.find((h) => s >= h.start && e <= h.end);
-          segs.push({ text: text.slice(s, e), hiId: hi ? hi.id : null });
+segs.push({ text: text.slice(s, e), hiId: hi ? hi.id : null, bold: bold.ranges.some(([a, b]) => s >= a && e <= b) });
         }
         return segs;
-      }, [text, highlights]);
+}, [text, highlights, bold]);
 
       return (
         <div>
@@ -5751,10 +5835,10 @@ const addPart = () => setSections((s) => ({ ...s, listening: { ...s.listening, p
                   onClick={() => removeHighlight(s.hiId)}
                   title="O'chirish uchun bosing"
                   className="cursor-pointer"
-                  style={{ backgroundColor: C.highlightBg, color: C.highlightText, borderRadius: "2px" }}
+style={{ backgroundColor: C.highlightBg, color: C.highlightText, borderRadius: "2px", fontWeight: s.bold ? 700 : undefined }}
                 >{s.text}</span>
               ) : (
-                <span key={i}>{s.text}</span>
+<span key={i} style={s.bold ? { fontWeight: 700 } : undefined}>{s.text}</span>
               )
             ))}
             {selBtn && (
@@ -6789,7 +6873,7 @@ const addPart = () => setSections((s) => ({ ...s, listening: { ...s.listening, p
                         <Icon name="volume-high" size={16} /> Audio biriktirilmagan — matn asosida javob bering
                       </div>
                     )}
-                    <p className="text-[13px] whitespace-pre-wrap" style={{ color: C.muted }}>{exam.sections.listening.instructions}</p>
+                    <p className="text-[13px] whitespace-pre-wrap" style={{ color: C.muted }}><RichText text={exam.sections.listening.instructions} /></p>
                     <MCQBlock sectionKey="listening" questions={listeningPartQuestions(currentListeningPart)} numberOffset={listeningNumberOffset} answers={answers.listening} setAnswers={(fn) => setAnswers((a) => ({ ...a, listening: fn(a.listening) }))} flagged={flagged} onToggleFlag={toggleFlag} />
                   </div>
                 )}
@@ -6827,7 +6911,7 @@ const addPart = () => setSections((s) => ({ ...s, listening: { ...s.listening, p
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                       <div className="lg:max-h-[65vh] lg:overflow-y-auto lg:pr-1 space-y-3">
                         <div className="font-bold text-[13.5px] uppercase tracking-wide" style={{ color: C.ink }}>Writing Task {writingTask}</div>
-                        <div className="text-[13.5px] whitespace-pre-wrap leading-relaxed" style={{ color: C.text }}>{writingTask === 1 ? writing.task1.prompt : writing.task2.prompt}</div>
+                        <div className="text-[13.5px] whitespace-pre-wrap leading-relaxed" style={{ color: C.text }}><RichText text={writingTask === 1 ? writing.task1.prompt : writing.task2.prompt} /></div>
                         {writingTask === 1 && writing.task1.imageUrl && (
                           <div className="space-y-1.5">
                             <img src={writing.task1.imageUrl} alt="Writing task" className="w-full rounded-lg" style={{ border: `1px solid ${C.borderSoft}` }} />
