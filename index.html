@@ -3370,7 +3370,7 @@
         if (!blanks.length) return given && given.toString().trim() ? given : null;
         const g = given && typeof given === "object" ? given : {};
         if (!blanks.some((b) => (g[b.id] || "").toString().trim())) return null;
-        return (q.parts || []).map((p) => (p.type === "blank" ? ((g[p.id] || "").toString().trim() || "____") : p.value)).join("");
+        return (q.parts || []).map((p) => (p.type === "blank" ? ((g[p.id] || "").toString().trim() || "____") : String(p.value || "").replace(/\*\*/g, ""))).join("");
       }
       if (given == null || !q.options) return null;
       return q.options[given] ?? null;
@@ -3418,7 +3418,45 @@
       const [focusBlankId, setFocusBlankId] = React.useState(null);
       const parts = question.parts && question.parts.length ? question.parts : [{ type: "text", value: "" }];
       const rawText = partsToRawText(parts);
-      const blanks = parts.filter((p) => p.type === "blank");
+const blanks = parts.filter((p) => p.type === "blank");
+
+      /* Qalin (bold) — matnni belgilab "B" yoki Ctrl+B. Bo'sh joylar (_____) oralig'idagi har bir qism alohida o'raladi. */
+      const taRef = React.useRef(null);
+      const selRef = React.useRef({ start: 0, end: 0 });
+      const trackSel = (el) => { if (el) selRef.current = { start: el.selectionStart, end: el.selectionEnd }; };
+      const applyBold = () => {
+        const el = taRef.current;
+        if (!el) return;
+        const { start, end } = selRef.current;
+        let next, cs, ce;
+        if (start === end) {
+          next = rawText.slice(0, start) + "**qalin matn**" + rawText.slice(end);
+          cs = start + 2;
+          ce = start + 2 + "qalin matn".length;
+        } else {
+          const segs = rawText.slice(start, end).split("_____");
+          const cores = segs.map((sg) => /^(\s*)([\s\S]*?)(\s*)$/.exec(sg));
+          const texts = cores.filter((m) => m[2]);
+          if (!texts.length) return;
+          const allBold = texts.every((m) => m[2].length >= 4 && m[2].startsWith("**") && m[2].endsWith("**"));
+          const wrapped = cores.map((m) => (m[2] ? m[1] + (allBold ? m[2].slice(2, -2) : "**" + m[2] + "**") + m[3] : m[0])).join("_____");
+          next = rawText.slice(0, start) + wrapped + rawText.slice(end);
+          cs = start;
+          ce = start + wrapped.length;
+        }
+        onChange(rawTextToParts(next, parts));
+        selRef.current = { start: cs, end: ce };
+        requestAnimationFrame(() => {
+          if (taRef.current) { taRef.current.focus(); taRef.current.setSelectionRange(cs, ce); }
+        });
+      };
+      const handleKeyDown = (e) => {
+        if ((e.ctrlKey || e.metaKey) && (e.key === "b" || e.key === "B")) {
+          e.preventDefault();
+          trackSel(e.target);
+          applyBold();
+        }
+      };
 
       React.useEffect(() => {
         if (focusBlankId && blankRefs.current[focusBlankId]) {
@@ -3459,7 +3497,12 @@
         <div className="space-y-2">
           <textarea
             value={rawText}
+ref={taRef}
             onChange={(e) => onChange(rawTextToParts(e.target.value, parts))}
+            onSelect={(e) => trackSel(e.target)}
+            onMouseUp={(e) => trackSel(e.target)}
+            onKeyUp={(e) => trackSel(e.target)}
+            onKeyDown={handleKeyDown}
             onContextMenu={handleContextMenu}
             rows={6}
             placeholder="Matnni shu yerga yozing... Bo'sh joy qo'yish uchun kerakli joyda sichqonchaning o'ng tugmasini bosing"
@@ -3468,7 +3511,16 @@
           />
           <div className="text-[11px]" style={{ color: C.mutedSoft }}>
             <Icon name="circle-info" size={10} className="mr-1" />
-            Matn ustida sichqonchaning o'ng tugmasini bosib, o'sha joyga bo'sh joy qo'shing
+Matn ustida sichqonchaning o'ng tugmasini bosib, o'sha joyga bo'sh joy qo'shing
+            <button
+              type="button"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={applyBold}
+              title="Belgilangan matnni qalinlashtirish (Ctrl+B)"
+              className="w-7 h-7 rounded-md inline-flex items-center justify-center font-bold text-[12.5px] ml-3 align-middle transition-opacity hover:opacity-70"
+              style={{ border: `1px solid ${C.border}`, backgroundColor: C.card, color: C.text }}
+            >B</button>
+            <span className="ml-1.5">belgilab "B" ni bosing yoki Ctrl+B</span>
           </div>
           {blanks.length > 0 && (
             <div className="space-y-1.5">
@@ -5852,7 +5904,7 @@ const addPart = () => setSections((s) => ({ ...s, listening: { ...s.listening, p
                             }}
                           />
                         ) : (
-                          <span key={pi}>{p.value}</span>
+                      <span key={pi}><RichText text={p.value} /></span>
                         ))}
                       </div>
                     ) : (
