@@ -3240,7 +3240,7 @@
         ...speaking,
         parts: speaking.parts.map((p, i) => {
           const { questionCount, ...rest } = p || {};
-          return { ...rest, id: rest.id || uid("spart"), title: rest.title || `Part ${i + 1}`, questions: Array.isArray(rest.questions) ? rest.questions : [] };
+          return { ...rest, id: rest.id || uid("spart"), title: (rest.title === undefined || rest.title === null) ? `Part ${i + 1}` : rest.title, questions: Array.isArray(rest.questions) ? rest.questions : [] };
         }),
       };
     }
@@ -3557,7 +3557,7 @@
       const toggleSection = (key) => setSections((s) => ({ ...s, [key]: { ...s[key], enabled: !s[key].enabled } }));
 
       /* Listening — Part1/Part2... boshqaruvi */
-const addPart = () => setSections((s) => ({ ...s, listening: { ...s.listening, parts: [...s.listening.parts, { id: uid("part"), title: `Part ${s.listening.parts.length + 1}`, questions: [], audioUrl: "" }] } }));
+const addPart = () => setSections((s) => ({ ...s, listening: { ...s.listening, parts: [...s.listening.parts, { id: uid("part"), title: "", questions: [], audioUrl: "" }] } }));
       const removePart = (partId) => setSections((s) => ({ ...s, listening: { ...s.listening, parts: s.listening.parts.filter((p) => p.id !== partId) } }));
       const renamePart = (partId, val) => setSections((s) => ({ ...s, listening: { ...s.listening, parts: s.listening.parts.map((p) => (p.id === partId ? { ...p, title: val } : p)) } }));
       /* Partning javob turi — "mcq" (variantli/ABC) yoki "text" (matnli/bo'sh joyli). Bir marta tanlanadi. */
@@ -3571,10 +3571,10 @@ const addPart = () => setSections((s) => ({ ...s, listening: { ...s.listening, p
       /* Speaking — part va savollar dinamik: part qo'shish/o'chirish/nomini o'zgartirish,
          savol qo'shish/tahrirlash/o'chirish/tartibini o'zgartirish. Sonlar cheklanmagan. */
       const patchSpeakingParts = (fn) => setSections((s) => ({ ...s, speaking: { ...s.speaking, parts: fn(s.speaking.parts) } }));
-      const addSpeakingPart = () => patchSpeakingParts((parts) => {
-        const maxN = parts.reduce((m, p) => { const r = /^Part\s+(\d+)$/i.exec((p.title || "").trim()); return r ? Math.max(m, Number(r[1])) : m; }, 0);
-        return [...parts, { id: uid("spart"), title: `Part ${Math.max(maxN, parts.length) + 1}`, questions: [] }];
-      });
+      const addSpeakingPart = () => patchSpeakingParts((parts) => [
+        ...parts,
+        { id: uid("spart"), title: "", questions: [] },
+      ]);
       const removeSpeakingPart = (partId) => patchSpeakingParts((parts) => (parts.length > 1 ? parts.filter((p) => p.id !== partId) : parts));
       const renameSpeakingPart = (partId, title) => patchSpeakingParts((parts) => parts.map((p) => (p.id === partId ? { ...p, title } : p)));
       const addSpeakingQuestion = (partId, text) => {
@@ -4075,6 +4075,7 @@ const addPart = () => setSections((s) => ({ ...s, listening: { ...s.listening, p
                     <div className="flex items-center gap-2">
                       <input
                         value={part.title}
+                        placeholder="Part nomi/raqamini yozing (masalan: Part 2)"
                         onChange={(e) => renamePart(part.id, e.target.value)}
                         className="font-semibold text-[13.5px] rounded-lg px-2 py-1.5 outline-none flex-1"
                         style={{ border: `1px solid ${C.border}`, backgroundColor: C.card, color: C.ink }}
@@ -4176,6 +4177,7 @@ const addPart = () => setSections((s) => ({ ...s, listening: { ...s.listening, p
                   <div className="flex items-center gap-2">
                     <input
                       value={part.title}
+                      placeholder="Part nomi/raqamini yozing (masalan: Part 2)"
                       onChange={(e) => renameSpeakingPart(part.id, e.target.value)}
                       className="font-semibold text-[13.5px] rounded-lg px-2 py-1.5 outline-none flex-1"
                       style={{ border: `1px solid ${C.border}`, backgroundColor: C.card, color: C.ink }}
