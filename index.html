@@ -3248,6 +3248,22 @@
 
     /* Listening bo'limi Part1/Part2... tuzilmasida saqlanadi. Eski (parts'siz,
        flat questions) mock'lar bilan orqaga moslik uchun fallback. */
+    function migrateListeningAudio(listening) {
+      const lp = getListeningParts(listening);
+      if (!lp.some((p) => p.audioUrl) && listening.audioUrl) {
+        return lp.map((p, i) => (i === 0 ? { ...p, audioUrl: listening.audioUrl } : p));
+      }
+      return lp;
+    }
+
+    function getListeningPartsWithAudio(listening) {
+      const parts = getListeningParts(listening);
+      const own = parts.filter((p) => p.audioUrl);
+      if (own.length === 0) return parts.map((p) => ({ ...p, audioUrl: listening.audioUrl || "", audioShared: !!listening.audioUrl }));
+      if (own.length === 1) return parts.map((p) => ({ ...p, audioUrl: own[0].audioUrl, audioShared: parts.length > 1 }));
+      return parts.map((p) => ({ ...p, audioShared: false }));
+    }
+
     function getListeningParts(listening) {
       const parts = listening.parts || [{ id: "legacy", title: "Part 1", questions: listening.questions || [] }];
       // Eski mock'larda audio bitta bo'lim darajasida saqlangan edi — part'ning o'zida
@@ -3873,7 +3889,7 @@ const addPart = () => setSections((s) => ({ ...s, listening: { ...s.listening, p
             {questions.map((q, i) => (
               <div key={q.id} className="rounded-lg p-3" style={{ backgroundColor: C.paperDim }}>
                 <div className="flex items-start justify-between gap-2">
-                  <div className="text-[13px] font-medium" style={{ color: C.text, whiteSpace: "pre-wrap" }}>{i + 1}.{q.q ? <> <RichText text={q.q} /></> : ""}</div>
+                  <div className="text-[13px] font-medium" style={{ color: C.text, whiteSpace: "pre-wrap" }}>{q.q ? <RichText text={q.q} /> : null}</div>
                   <button onClick={() => removeQuestion(key, q.id, partId)}><Icon name="trash" size={13} style={{ color: C.mutedSoft }} /></button>
                 </div>
                 <div className="mt-2">
@@ -5808,7 +5824,7 @@ const addPart = () => setSections((s) => ({ ...s, listening: { ...s.listening, p
               <div key={q.id} id={`q-${sectionKey}-${q.id}`}>
                 <div className="flex items-start justify-between gap-2 mb-2">
                   <div className="text-[13.5px] font-semibold" style={{ color: C.text, whiteSpace: "pre-wrap" }}>
-                    {startNumber + i + 1}.{q.q ? <> <RichText text={q.q} /></> : ""}
+                    {q.q ? <RichText text={q.q} /> : null}
                     {q.answerType === "multi" && <span className="ml-1.5 text-[11px] font-normal italic" style={{ color: C.mutedSoft }}>(bir nechta javobni tanlang)</span>}
                     {q.answerType === "matching" && <span className="ml-1.5 text-[11px] font-normal italic" style={{ color: C.mutedSoft }}>({matchTypeLabel(q.matchType)})</span>}
                   </div>
