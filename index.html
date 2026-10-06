@@ -3252,7 +3252,19 @@
       const parts = listening.parts || [{ id: "legacy", title: "Part 1", questions: listening.questions || [] }];
       // Eski mock'larda audio bitta bo'lim darajasida saqlangan edi — part'ning o'zida
       // audio bo'lmasa, orqaga moslik uchun o'sha eski audiodan foydalaniladi.
-      return parts.map((p) => ({ ...p, audioUrl: p.audioUrl || listening.audioUrl || "" }));
+      return parts.map((p) => ({ ...p }));
+    }
+
+    /* O'quvchi tomoni uchun audio qoidasi (ma'lumot nusxalanmaydi — faqat ko'rsatishda hisoblanadi):
+       - hech bir partda audio yo'q  -> eski bo'lim darajasidagi audio (bo'lsa) hammaga
+       - aynan bitta partda audio bor -> o'sha audio AVTOMATIK hamma partga
+       - ikki va undan ko'p partda audio bor -> har bir part o'zining audiosi bilan (audiosizda audio yo'q) */
+    function getListeningPartsWithAudio(listening) {
+      const parts = getListeningParts(listening);
+      const own = parts.filter((p) => p.audioUrl);
+      if (own.length === 0) return parts.map((p) => ({ ...p, audioUrl: listening.audioUrl || "", audioShared: !!listening.audioUrl }));
+      if (own.length === 1) return parts.map((p) => ({ ...p, audioUrl: own[0].audioUrl, audioShared: parts.length > 1 }));
+      return parts.map((p) => ({ ...p, audioShared: false }));
     }
 
     /* Writing bo'limi endi Task 1 / Task 2'ga bo'lingan holda saqlanadi. Eski (flat
@@ -3489,7 +3501,12 @@
           writing: { enabled: true, task1: { prompt: "", imageUrl: "", imageName: "", imageMime: "", minWords: 150 }, task2: { prompt: "", minWords: 250 } },
           speaking: normalizeSpeaking(null),
         };
-        return { ...base, listening: { ...base.listening, parts: getListeningParts(base.listening) }, reading: { ...base.reading, paragraphs: base.reading.paragraphs || [] }, writing: normalizeWriting(base.writing), speaking: normalizeSpeaking(base.speaking) };
+        const lParts = getListeningParts(base.listening);
+        // Eski mock: audio bo'lim darajasida edi — endi uni 1-partga ko'chiramiz (u baribir hamma partga ishlaydi)
+        const lPartsMigrated = (!lParts.some((p) => p.audioUrl) && base.listening.audioUrl)
+          ? lParts.map((p, i) => (i === 0 ? { ...p, audioUrl: base.listening.audioUrl } : p))
+          : lParts;
+        return { ...base, listening: { ...base.listening, audioUrl: "", parts: lPartsMigrated }, reading: { ...base.reading, paragraphs: base.reading.paragraphs || [] }, writing: normalizeWriting(base.writing), speaking: normalizeSpeaking(base.speaking) };
       });
       const [qDraft, setQDraft] = useState({ listening: "", reading: "" });
       const [speakingDraft, setSpeakingDraft] = useState({});
@@ -4048,7 +4065,8 @@ const addPart = () => setSections((s) => ({ ...s, listening: { ...s.listening, p
         if (key === "listening") {
           const total = s.parts.reduce((sum, p) => sum + p.questions.length, 0);
           const audioCount = s.parts.filter((p) => p.audioUrl).length;
-          return total ? `${total} ta savol, ${s.parts.length} ta part${audioCount ? ` (${audioCount} tasida audio)` : ""}` : "Savollar kiritilmagan";
+          const audioNote = audioCount === 1 && s.parts.length > 1 ? " (1 ta audio — hamma partga)" : audioCount ? ` (${audioCount} tasida audio)` : "";
+          return total ? `${total} ta savol, ${s.parts.length} ta part${audioNote}` : "Savollar kiritilmagan";
         }
         if (key === "reading") return (s.paragraphs && s.paragraphs.length) || s.passage.trim() ? `${s.questions.length} ta savol, matn bor` : "Matn kiritilmagan";
         if (key === "writing") {
@@ -4070,7 +4088,16 @@ const addPart = () => setSections((s) => ({ ...s, listening: { ...s.listening, p
             <>
               <TextArea label="Yo'riqnoma" rows={2} value={sections.listening.instructions} onChange={(v) => setSections((s) => ({ ...s, listening: { ...s.listening, instructions: v } }))} />
               <div className="space-y-4">
-                {sections.listening.parts.map((part) => (
+                {(() => {
+                  const n = sections.listening.parts.filter((p) => p.audioUrl).length;
+                  const msg = n === 0
+                    ? "Audio yuklanmagan. Bitta audio yuklasangiz — u hamma partga avtomatik biriktiriladi."
+                    : n === 1
+                      ? "Bitta audio yuklandi — u hamma partga avtomatik ishlaydi. Partlar uchun alohida audio kerak bo'lsa, boshqa partlarga ham o'z audiosini yuklang."
+                      : "Har bir part o'zining audiosi bilan ishlaydi. Audio yuklanmagan partda audio chiqmaydi.";
+                  return <div className="text-[12px]" style={{ color: C.mutedSoft }}>{msg}</div>;
+                })()}
+                {sections.listening.parts.map((part, pIdx) => (
                   <div key={part.id} className="rounded-xl p-3 space-y-3" style={{ border: `1px solid ${C.borderSoft}` }}>
                     <div className="flex items-center gap-2">
                       <input
@@ -4084,7 +4111,11 @@ const addPart = () => setSections((s) => ({ ...s, listening: { ...s.listening, p
                         <button onClick={() => removePart(part.id)} title="Partni o'chirish"><Icon name="trash" size={13} style={{ color: C.mutedSoft }} /></button>
                       )}
                     </div>
-                    <AudioDropInput label={`${part.title} — audio fayl (ixtiyoriy)`} value={part.audioUrl} onChange={(v) => setPartAudio(part.id, v)} />
+                    <AudioDropInput
+                      label={`${part.title || `Part ${pIdx + 1}`} — audio fayl (ixtiyoriy)${!part.audioUrl && sections.listening.parts.filter((p) => p.audioUrl).length === 1 ? " · umumiy audio ishlatiladi" : ""}`}
+                      value={part.audioUrl}
+                      onChange={(v) => setPartAudio(part.id, v)}
+                    />
                     {questionSection("listening", part.id)}
                   </div>
                 ))}
@@ -6563,7 +6594,7 @@ const addPart = () => setSections((s) => ({ ...s, listening: { ...s.listening, p
       }, []);
 
       const writing = normalizeWriting(exam.sections.writing);
-      const listeningParts = getListeningParts(exam.sections.listening);
+      const listeningParts = getListeningPartsWithAudio(exam.sections.listening);
       const currentListeningPart = listeningParts[Math.min(listeningPartIdx, listeningParts.length - 1)] || listeningParts[0];
       const listeningNumberOffset = listeningParts.slice(0, listeningParts.indexOf(currentListeningPart)).reduce((sum, p) => sum + listeningPartQuestions(p).length, 0);
       const speakingParts = speakingPlayableParts(exam.sections.speaking);
@@ -6691,6 +6722,7 @@ const addPart = () => setSections((s) => ({ ...s, listening: { ...s.listening, p
                       <div className="flex items-center gap-2 rounded-lg p-3" style={{ backgroundColor: C.paperDim }}>
                         <Icon name="volume-high" size={16} style={{ color: C.teal }} />
                         <audio controls src={currentListeningPart.audioUrl} className="w-full" />
+                        {currentListeningPart.audioShared && <span className="text-[11.5px] shrink-0" style={{ color: C.mutedSoft }}>Umumiy audio</span>}
                         <a href={currentListeningPart.audioUrl} download="listening-audio.mp3" title="Audioni yuklab olish" className="shrink-0 p-1.5 rounded-lg" style={{ color: C.teal }}>
                           <Icon name="download" size={15} />
                         </a>
