@@ -3271,17 +3271,6 @@
       return parts.map((p) => ({ ...p }));
     }
 
-    /* O'quvchi tomoni uchun audio qoidasi (ma'lumot nusxalanmaydi — faqat ko'rsatishda hisoblanadi):
-       - hech bir partda audio yo'q  -> eski bo'lim darajasidagi audio (bo'lsa) hammaga
-       - aynan bitta partda audio bor -> o'sha audio AVTOMATIK hamma partga
-       - ikki va undan ko'p partda audio bor -> har bir part o'zining audiosi bilan (audiosizda audio yo'q) */
-    function getListeningPartsWithAudio(listening) {
-      const parts = getListeningParts(listening);
-      const own = parts.filter((p) => p.audioUrl);
-      if (own.length === 0) return parts.map((p) => ({ ...p, audioUrl: listening.audioUrl || "", audioShared: !!listening.audioUrl }));
-      if (own.length === 1) return parts.map((p) => ({ ...p, audioUrl: own[0].audioUrl, audioShared: parts.length > 1 }));
-      return parts.map((p) => ({ ...p, audioShared: false }));
-    }
 
     /* Writing bo'limi endi Task 1 / Task 2'ga bo'lingan holda saqlanadi. Eski (flat
        prompt/minWords/imageUrl) mock'lar bilan orqaga moslik uchun fallback — eski
