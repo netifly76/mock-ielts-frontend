@@ -3264,6 +3264,17 @@
       return parts.map((p) => ({ ...p, audioShared: false }));
     }
 
+    /* Reading bo'limi ham Listening kabi part'larga bo'linadi (cheksiz). Har bir part
+       o'zining matni (paragraflar), va savollariga ega. Eski (parts'siz) mock'lar —
+       passage/paragraphs/questions bo'lim darajasida edi — bitta part sifatida o'qiladi. */
+    function getReadingParts(reading) {
+      const r = reading || {};
+      if (Array.isArray(r.parts) && r.parts.length) {
+        return r.parts.map((p) => ({ ...p, passage: p.passage || "", paragraphs: p.paragraphs || [], questions: p.questions || [] }));
+      }
+      return [{ id: "legacy", title: "Part 1", passage: r.passage || "", paragraphs: r.paragraphs || [], questions: r.questions || [] }];
+    }
+
     function getListeningParts(listening) {
       const parts = listening.parts || [{ id: "legacy", title: "Part 1", questions: listening.questions || [] }];
       // Eski mock'larda audio bitta bo'lim darajasida saqlangan edi — part'ning o'zida
@@ -3295,6 +3306,9 @@
       function flattenSectionQuestions(exam, key) {
         if (key === "listening") {
           return getListeningParts(exam.sections.listening).flatMap(listeningPartQuestions);
+        }
+        if (key === "reading") {
+          return getReadingParts(exam.sections.reading).flatMap((p) => p.questions);
         }
         return exam.sections[key]?.questions || [];
       }
@@ -3608,7 +3622,7 @@ Matn ustida sichqonchaning o'ng tugmasini bosib, o'sha joyga bo'sh joy qo'shing
       const [sections, setSections] = useState(() => {
         const base = initialExam?.sections || {
           listening: { enabled: true, audioUrl: "", instructions: "", parts: [{ id: uid("part"), title: "Part 1", questions: [] }] },
-          reading: { enabled: true, instructions: "", passage: "", paragraphs: [], questions: [] },
+          reading: { enabled: true, instructions: "", parts: [{ id: uid("rpart"), title: "Part 1", passage: "", paragraphs: [], questions: [] }] },
           writing: { enabled: true, task1: { prompt: "", imageUrl: "", imageName: "", imageMime: "", minWords: 150 }, task2: { prompt: "", minWords: 250 } },
           speaking: normalizeSpeaking(null),
         };
@@ -3617,7 +3631,7 @@ Matn ustida sichqonchaning o'ng tugmasini bosib, o'sha joyga bo'sh joy qo'shing
         const lPartsMigrated = (!lParts.some((p) => p.audioUrl) && base.listening.audioUrl)
           ? lParts.map((p, i) => (i === 0 ? { ...p, audioUrl: base.listening.audioUrl } : p))
           : lParts;
-        return { ...base, listening: { ...base.listening, audioUrl: "", parts: lPartsMigrated }, reading: { ...base.reading, paragraphs: base.reading.paragraphs || [] }, writing: normalizeWriting(base.writing), speaking: normalizeSpeaking(base.speaking) };
+        return { ...base, listening: { ...base.listening, audioUrl: "", parts: lPartsMigrated }, reading: { ...base.reading, parts: getReadingParts(base.reading) }, writing: normalizeWriting(base.writing), speaking: normalizeSpeaking(base.speaking) };
       });
       const [qDraft, setQDraft] = useState({ listening: "", reading: "" });
       const [speakingDraft, setSpeakingDraft] = useState({});
@@ -3729,6 +3743,9 @@ const addPart = () => setSections((s) => ({ ...s, listening: { ...s.listening, p
           if (sectionKey === "listening") {
             return { ...s, listening: { ...s.listening, parts: s.listening.parts.map((p) => (p.id === partId ? { ...p, questions: updater(p.questions) } : p)) } };
           }
+          if (sectionKey === "reading") {
+            return { ...s, reading: { ...s.reading, parts: s.reading.parts.map((p) => (p.id === partId ? { ...p, questions: updater(p.questions) } : p)) } };
+          }
           return { ...s, [sectionKey]: { ...s[sectionKey], questions: updater(s[sectionKey].questions) } };
         });
       };
@@ -3748,25 +3765,38 @@ const addPart = () => setSections((s) => ({ ...s, listening: { ...s.listening, p
       /* Matching savollarining `options`ini joriy paragraf harflariga moslab qayta
          hisoblaydi va `correctIndex`ni paragraflar sonidan oshib ketmasligini ta'minlaydi —
          paragraf qo'shilganda/o'chirilganda barcha matching savollar avtomatik sinxronlanadi. */
-      const syncMatchingQuestions = (readingSection) => {
-        const labels = readingSection.paragraphs.map((p) => p.label);
+      const syncMatchingQuestions = (readingPart) => {
+        const labels = readingPart.paragraphs.map((p) => p.label);
         return {
-          ...readingSection,
-          questions: readingSection.questions.map((q) => (
+          ...readingPart,
+          questions: readingPart.questions.map((q) => (
             q.answerType === "matching"
               ? { ...q, options: labels, correctIndex: Math.min(q.correctIndex || 0, Math.max(labels.length - 1, 0)) }
               : q
           )),
         };
       };
-      const setReadingParagraphs = (updater) => setSections((s) => ({
+      /* Reading part'lari — Part qo'shish/o'chirish/nomini o'zgartirish. Sonlar cheklanmagan;
+         har bir partning paragraflari va savollari mustaqil. */
+      const patchReadingPart = (partId, fn) => setSections((s) => ({
         ...s,
-        reading: syncMatchingQuestions({ ...s.reading, paragraphs: relabelParagraphs(updater(s.reading.paragraphs)) }),
+        reading: { ...s.reading, parts: s.reading.parts.map((p) => (p.id === partId ? fn(p) : p)) },
       }));
-      const addParagraph = () => setReadingParagraphs((ps) => [...ps, { id: uid("para"), label: "", text: "" }]);
-      const removeParagraph = (id) => setReadingParagraphs((ps) => ps.filter((p) => p.id !== id));
-      const setParagraphText = (id, text) => setReadingParagraphs((ps) => ps.map((p) => (p.id === id ? { ...p, text } : p)));
-      const moveParagraph = (idx, dir) => setReadingParagraphs((ps) => {
+      const addReadingPart = () => setSections((s) => ({
+        ...s,
+        reading: { ...s.reading, parts: [...s.reading.parts, { id: uid("rpart"), title: `Part ${s.reading.parts.length + 1}`, passage: "", paragraphs: [], questions: [] }] },
+      }));
+      const removeReadingPart = (partId) => setSections((s) => (
+        s.reading.parts.length > 1 ? { ...s, reading: { ...s.reading, parts: s.reading.parts.filter((p) => p.id !== partId) } } : s
+      ));
+      const renameReadingPart = (partId, title) => patchReadingPart(partId, (p) => ({ ...p, title }));
+      const setReadingParagraphs = (partId, updater) => patchReadingPart(partId, (p) => (
+        syncMatchingQuestions({ ...p, paragraphs: relabelParagraphs(updater(p.paragraphs)) })
+      ));
+      const addParagraph = (partId) => setReadingParagraphs(partId, (ps) => [...ps, { id: uid("para"), label: "", text: "" }]);
+      const removeParagraph = (partId, id) => setReadingParagraphs(partId, (ps) => ps.filter((p) => p.id !== id));
+      const setParagraphText = (partId, id, text) => setReadingParagraphs(partId, (ps) => ps.map((p) => (p.id === id ? { ...p, text } : p)));
+      const moveParagraph = (partId, idx, dir) => setReadingParagraphs(partId, (ps) => {
         const next = ps.slice();
         const target = idx + dir;
         if (target < 0 || target >= next.length) return ps;
@@ -3780,7 +3810,7 @@ const addPart = () => setSections((s) => ({ ...s, listening: { ...s.listening, p
           : answerType === "multi"
             ? { id: uid("q"), q: text, answerType: "multi", options: (d.options && d.options.length ? d.options : defaultOptions()), correctIndexes: (d.correctIndexes && d.correctIndexes.length ? d.correctIndexes : [0]) }
             : answerType === "matching"
-              ? { id: uid("q"), q: text, answerType: "matching", matchType: "information", options: sections.reading.paragraphs.map((p) => p.label), correctIndex: d.correctIndex ?? 0 }
+              ? { id: uid("q"), q: text, answerType: "matching", matchType: "information", options: ((sections.reading.parts.find((rp) => rp.id === partId) || {}).paragraphs || []).map((p) => p.label), correctIndex: d.correctIndex ?? 0 }
               : { id: uid("q"), q: text, answerType: "mcq", options: (d.options && d.options.length ? d.options : defaultOptions()), correctIndex: d.correctIndex ?? 0 };
         updateQuestions(sectionKey, (qs) => [...qs, newQ], partId);
       };
@@ -3902,11 +3932,14 @@ const addPart = () => setSections((s) => ({ ...s, listening: { ...s.listening, p
       const submit = async () => {
         if (!title.trim()) { toast("error", "Exam nomini kiriting"); return; }
         setSaving(true);
+        /* Orqaga moslik: Reading'ning barcha savollari bo'lim darajasidagi `questions`ga ham
+           (yassilangan holda) yozib qo'yiladi — eski kod/backend shuni o'qisa ham ishlayveradi. */
+        const outSections = { ...sections, reading: { ...sections.reading, questions: sections.reading.parts.flatMap((p) => p.questions) } };
         if (isEdit) {
-          await onSave({ ...initialExam, title: title.trim(), examType, assignedGroupIds, sections });
+          await onSave({ ...initialExam, title: title.trim(), examType, assignedGroupIds, sections: outSections });
         } else {
           await onSave({
-            id: uid("exam"), title: title.trim(), examType, status: "on", assignedGroupIds, createdAt: Date.now(), reopenedAt: null, notifSeenBy: [], sections,
+            id: uid("exam"), title: title.trim(), examType, status: "on", assignedGroupIds, createdAt: Date.now(), reopenedAt: null, notifSeenBy: [], sections: outSections,
           });
         }
         setSaving(false);
@@ -3914,12 +3947,14 @@ const addPart = () => setSections((s) => ({ ...s, listening: { ...s.listening, p
 
       const questionSection = (key, partId) => {
         const part = key === "listening" ? sections.listening.parts.find((p) => p.id === partId) : null;
-        const questions = part ? part.questions : sections[key].questions;
+        const rPart = key === "reading" ? sections.reading.parts.find((p) => p.id === partId) : null;
+        const rParagraphs = rPart ? rPart.paragraphs : [];
+        const questions = part ? part.questions : rPart ? rPart.questions : sections[key].questions;
         const draftKey = partId ? `${key}:${partId}` : key;
         /* part yo'q bo'lgan bo'limlarda (Reading) har bir yangi savol uchun
            avval javob turi tanlanadi — tanlanmaguncha matn kiritish maydoni ko'rsatilmaydi. */
         const selectedType = qType[draftKey];
-        const canPickMatching = key === "reading" && sections.reading.paragraphs.length > 0;
+        const canPickMatching = key === "reading" && rParagraphs.length > 0;
         const typeLabel = (t) => (t === "mcq" ? "Variantli (MCQ)" : t === "multi" ? "Bir nechta javobli" : t === "text" ? "Matn javob" : t === "matching" ? "Moslashtirish" : "");
 
         /* Listening part'lari uchun: javob turi ("mcq" — abc / "multi" — bir nechta to'g'ri
@@ -4037,7 +4072,7 @@ const addPart = () => setSections((s) => ({ ...s, listening: { ...s.listening, p
                       <span className="font-semibold" style={{ color: C.tealDeep }}>{matchTypeLabel(q.matchType)}</span> — to'g'ri paragrafni tanlang, variantlar "Paragraflar" bo'limi bilan avtomatik sinxron:
                     </div>
                     {(q.options || []).map((label, idx) => {
-                      const para = sections.reading.paragraphs[idx];
+                      const para = rParagraphs[idx];
                       return (
                         <label key={idx} className="flex items-center gap-1.5 text-[12px] cursor-pointer">
                           <input type="radio" checked={q.correctIndex === idx} onChange={() => setCorrect(key, q.id, idx, partId)} />
@@ -4152,7 +4187,7 @@ const addPart = () => setSections((s) => ({ ...s, listening: { ...s.listening, p
                   canPickMatching ? (
                     <div className="space-y-1.5 rounded-lg p-2.5" style={{ backgroundColor: C.paperDim }}>
                       <div className="text-[11px] font-semibold" style={{ color: C.mutedSoft }}>To'g'ri paragrafni tanlang:</div>
-                      {sections.reading.paragraphs.map((p, idx) => (
+                      {rParagraphs.map((p, idx) => (
                         <label key={p.id} className="flex items-center gap-1.5 text-[12px] cursor-pointer">
                           <input type="radio" checked={getOptDraft(draftKey, "matching").correctIndex === idx} onChange={() => setDraftCorrectIndex(draftKey, "matching", idx)} />
                           <span className="font-bold w-5 text-center" style={{ color: C.tealDeep }}>{p.label}</span>
@@ -4179,7 +4214,12 @@ const addPart = () => setSections((s) => ({ ...s, listening: { ...s.listening, p
           const audioNote = audioCount === 1 && s.parts.length > 1 ? " (1 ta audio — hamma partga)" : audioCount ? ` (${audioCount} tasida audio)` : "";
           return total ? `${total} ta savol, ${s.parts.length} ta part${audioNote}` : "Savollar kiritilmagan";
         }
-        if (key === "reading") return (s.paragraphs && s.paragraphs.length) || s.passage.trim() ? `${s.questions.length} ta savol, matn bor` : "Matn kiritilmagan";
+        if (key === "reading") {
+          const rps = getReadingParts(s);
+          const total = rps.reduce((sum, p) => sum + p.questions.length, 0);
+          const hasText = rps.some((p) => (p.paragraphs && p.paragraphs.length) || (p.passage || "").trim());
+          return hasText ? `${total} ta savol, ${rps.length} ta part` : "Matn kiritilmagan";
+        }
         if (key === "writing") {
           const w = normalizeWriting(s);
           const n = [w.task1.prompt.trim() ? 1 : 0, w.task2.prompt.trim() ? 1 : 0].reduce((a, b) => a + b, 0);
@@ -4237,32 +4277,54 @@ const addPart = () => setSections((s) => ({ ...s, listening: { ...s.listening, p
         }
         if (key === "reading") {
           return (
-            <>
-              <div className="rounded-xl p-3.5 space-y-2.5" style={{ border: `1px solid ${C.borderSoft}` }}>
+            <div className="space-y-4">
+              {sections.reading.parts.map((rp, rIdx) => (
+                <div key={rp.id} className="rounded-xl p-3 space-y-3" style={{ border: `1px solid ${C.borderSoft}` }}>
+                  <div className="flex items-center gap-2">
+                    <input
+                      value={rp.title}
+                      placeholder="Part nomi/raqamini yozing (masalan: Part 2)"
+                      onChange={(e) => renameReadingPart(rp.id, e.target.value)}
+                      className="font-semibold text-[13.5px] rounded-lg px-2 py-1.5 outline-none flex-1"
+                      style={{ border: `1px solid ${C.border}`, backgroundColor: C.card, color: C.ink }}
+                    />
+                    <span className="text-[11.5px] shrink-0" style={{ color: C.mutedSoft }}>{rp.questions.length} ta savol</span>
+                    {sections.reading.parts.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if ((rp.questions.length || rp.paragraphs.length) && !window.confirm(`"${rp.title || `Part ${rIdx + 1}`}" va undagi matn/savollar o'chiriladi. Davom etasizmi?`)) return;
+                          removeReadingPart(rp.id);
+                        }}
+                        title="Partni o'chirish"
+                      ><Icon name="trash" size={13} style={{ color: C.mutedSoft }} /></button>
+                    )}
+                  </div>
+                  <div className="rounded-xl p-3.5 space-y-2.5" style={{ border: `1px solid ${C.borderSoft}` }}>
                 <div className="flex items-center justify-between">
                   <div className="text-[13px] font-bold" style={{ color: C.ink }}>Paragraflar <span className="font-normal" style={{ color: C.mutedSoft }}>— matnni shu yerga paragraflarga bo'lib kiriting (Matching Headings/Information/Features savollari uchun ham ishlatiladi)</span></div>
-                  <Button size="sm" variant="ghost" icon="plus" onClick={addParagraph}>Paragraf qo'shish</Button>
+                  <Button size="sm" variant="ghost" icon="plus" onClick={() => addParagraph(rp.id)}>Paragraf qo'shish</Button>
                 </div>
-                {sections.reading.paragraphs.length === 0 ? (
+                {rp.paragraphs.length === 0 ? (
                   <div className="text-[12px] italic" style={{ color: C.mutedSoft }}>Hozircha paragraf kiritilmagan. Reading matnini shu yerda alohida paragraflarga bo'lib kiriting — har biriga harf (A, B, C...) avtomatik beriladi (son cheklanmagan) va Matching savollarda ham shu paragraflar ishlatiladi.</div>
-                ) : sections.reading.paragraphs.map((p, i) => (
+                ) : rp.paragraphs.map((p, i) => (
                   <div key={p.id} className="flex items-start gap-2 rounded-lg p-2" style={{ backgroundColor: C.paperDim }}>
                     <div className="flex flex-col items-center gap-1 shrink-0 pt-1">
                       <span className="w-7 h-7 rounded-full flex items-center justify-center text-[12.5px] font-bold" style={{ backgroundColor: C.tealSoft, color: C.tealDeep, border: `1.5px solid ${C.teal}` }}>{p.label}</span>
                       <div className="flex gap-0.5">
-                        <button type="button" disabled={i === 0} onClick={() => moveParagraph(i, -1)} title="Yuqoriga"><Icon name="chevron-up" size={11} style={{ color: i === 0 ? C.borderSoft : C.mutedSoft }} /></button>
-                        <button type="button" disabled={i === sections.reading.paragraphs.length - 1} onClick={() => moveParagraph(i, 1)} title="Pastga"><Icon name="chevron-down" size={11} style={{ color: i === sections.reading.paragraphs.length - 1 ? C.borderSoft : C.mutedSoft }} /></button>
+                        <button type="button" disabled={i === 0} onClick={() => moveParagraph(rp.id, i, -1)} title="Yuqoriga"><Icon name="chevron-up" size={11} style={{ color: i === 0 ? C.borderSoft : C.mutedSoft }} /></button>
+                        <button type="button" disabled={i === rp.paragraphs.length - 1} onClick={() => moveParagraph(rp.id, i, 1)} title="Pastga"><Icon name="chevron-down" size={11} style={{ color: i === rp.paragraphs.length - 1 ? C.borderSoft : C.mutedSoft }} /></button>
                       </div>
                     </div>
                     <textarea
                       value={p.text}
-                      onChange={(e) => setParagraphText(p.id, e.target.value)}
+                      onChange={(e) => setParagraphText(rp.id, p.id, e.target.value)}
                       placeholder={`Paragraf ${p.label} matni...`}
                       rows={3}
                       className="flex-1 rounded-lg px-2.5 py-2 text-[12.5px] outline-none resize-y"
                       style={{ border: `1px solid ${C.border}`, backgroundColor: C.card, color: C.text }}
                     />
-                    <button type="button" onClick={() => removeParagraph(p.id)} title="Paragrafni o'chirish" className="shrink-0 pt-1">
+                    <button type="button" onClick={() => removeParagraph(rp.id, p.id)} title="Paragrafni o'chirish" className="shrink-0 pt-1">
                       <Icon name="trash" size={13} style={{ color: C.mutedSoft }} />
                     </button>
                   </div>
@@ -4272,8 +4334,11 @@ const addPart = () => setSections((s) => ({ ...s, listening: { ...s.listening, p
                   Student bu matnni highlighter bilan belgilay oladi
                 </div>
               </div>
-              {questionSection("reading")}
-            </>
+                  {questionSection("reading", rp.id)}
+                </div>
+              ))}
+              <Button size="sm" variant="ghost" icon="plus" onClick={addReadingPart}>Part qo'shish</Button>
+            </div>
           );
         }
         if (key === "writing") {
@@ -5879,9 +5944,9 @@ style={{ backgroundColor: C.highlightBg, color: C.highlightText, borderRadius: "
     }
 
     /* Real CD IELTS'dagi kabi bo'lim tavsifi — Part 1 info box uchun */
-    function sectionInstructionText(key, count) {
+    function sectionInstructionText(key, count, offset = 0) {
       if (key === "writing") return `Ushbu vazifaga taxminan 20 daqiqa sarflang. Kamida ${count} so'z yozing.`;
-      const range = count > 1 ? `1 - ${count}` : "1";
+      const range = count > 1 ? `${offset + 1} - ${offset + count}` : `${offset + 1}`;
       if (key === "listening") return `Audioni tinglang va ${range}-savollarga javob bering.`;
       if (key === "reading") return `Matnni o'qing va ${range}-savollarga javob bering.`;
       if (key === "speaking") return "Savollarni o'qing va mikrofon tugmasi orqali javobingizni yozib oling. Har bir part alohida sahifada.";
@@ -6451,6 +6516,7 @@ style={{ backgroundColor: C.highlightBg, color: C.highlightText, borderRadius: "
       const [writingText, setWritingText] = useState({ task1: "", task2: "" });
       const [writingTask, setWritingTask] = useState(1); // 1 yoki 2 — Writing bo'limi ichidagi ikki task orasidagi tab
       const [listeningPartIdx, setListeningPartIdx] = useState(0); // Listening bo'limi ichidagi part'lar orasidagi tab
+      const [readingPartIdx, setReadingPartIdx] = useState(0); // Reading bo'limi ichidagi part'lar orasidagi tab
       const [speakingPartIdx, setSpeakingPartIdx] = useState(0); // Speaking — hozirgi part sahifasi
       const [speakingAudio, setSpeakingAudio] = useState({}); // { [partId]: { url, mime, durationSec, recordedAt } }
       const [speakingBusy, setSpeakingBusy] = useState(false); // mikrofon yozilayotgan paytda navigatsiya bloklanadi
@@ -6475,6 +6541,7 @@ style={{ backgroundColor: C.highlightBg, color: C.highlightText, borderRadius: "
             setWritingText(a.writing_text && (a.writing_text.task1 !== undefined) ? a.writing_text : { task1: "", task2: "" });
             setWritingTask((a.progress_data && a.progress_data.writingTask) || 1);
             setListeningPartIdx((a.progress_data && a.progress_data.listeningPartIdx) || 0);
+            setReadingPartIdx((a.progress_data && a.progress_data.readingPartIdx) || 0);
             setSpeakingPartIdx((a.progress_data && a.progress_data.speakingPartIdx) || 0);
             setSpeakingAudio((a.progress_data && a.progress_data.speaking) || {});
             setFlagged(a.flagged || {});
@@ -6577,7 +6644,7 @@ style={{ backgroundColor: C.highlightBg, color: C.highlightText, borderRadius: "
         notepad_text: notepadText,
         font_level: fontLevel,
         section_deadlines: sectionDeadlines,
-        progress_data: { writingTask, listeningPartIdx, speakingPartIdx, speaking: includeAudio ? speakingAudio : {} },
+        progress_data: { writingTask, listeningPartIdx, readingPartIdx, speakingPartIdx, speaking: includeAudio ? speakingAudio : {} },
       });
 
       const submit = async () => {
@@ -6714,7 +6781,7 @@ style={{ backgroundColor: C.highlightBg, color: C.highlightText, borderRadius: "
           examApi.saveProgress(exam.id, latestStateRef.current).catch(() => { });
         }, 1200);
         return () => clearTimeout(saveTimerRef.current);
-      }, [loaded, idx, answers, writingText, writingTask, listeningPartIdx, speakingPartIdx, speakingAudio, flagged, notepadText, fontLevel, sectionDeadlines]); // eslint-disable-line
+      }, [loaded, idx, answers, writingText, writingTask, listeningPartIdx, readingPartIdx, speakingPartIdx, speakingAudio, flagged, notepadText, fontLevel, sectionDeadlines]); // eslint-disable-line
 
       /* Komponent yo'q qilinganda (chiqishda) so'nggi holatni darhol (debounce'siz)
          yuboramiz — aks holda oxirgi 1.2 soniyadagi o'zgarish yo'qolib qolishi mumkin. */
@@ -6738,6 +6805,9 @@ style={{ backgroundColor: C.highlightBg, color: C.highlightText, borderRadius: "
       const listeningParts = getListeningPartsWithAudio(exam.sections.listening);
       const currentListeningPart = listeningParts[Math.min(listeningPartIdx, listeningParts.length - 1)] || listeningParts[0];
       const listeningNumberOffset = listeningParts.slice(0, listeningParts.indexOf(currentListeningPart)).reduce((sum, p) => sum + listeningPartQuestions(p).length, 0);
+      const readingParts = getReadingParts(exam.sections.reading);
+      const currentReadingPart = readingParts[Math.min(readingPartIdx, readingParts.length - 1)] || readingParts[0];
+      const readingNumberOffset = readingParts.slice(0, readingParts.indexOf(currentReadingPart)).reduce((sum, p) => sum + p.questions.length, 0);
       const speakingParts = speakingPlayableParts(exam.sections.speaking);
       const currentSpeakingPart = speakingParts[Math.min(speakingPartIdx, Math.max(0, speakingParts.length - 1))];
       const isSpeaking = !isReview && currentKey === "speaking" && !!currentSpeakingPart;
@@ -6814,9 +6884,9 @@ style={{ backgroundColor: C.highlightBg, color: C.highlightText, borderRadius: "
             )}
             {!isReview && (
               <div className="rounded-xl p-3 mb-3 shrink-0" style={{ backgroundColor: C.card, border: `1px solid ${C.borderSoft}` }}>
-                <div className="font-semibold text-[14px] mb-1" style={{ color: C.ink }}>{currentKey === "listening" ? currentListeningPart.title : currentKey === "speaking" && currentSpeakingPart ? currentSpeakingPart.title : "Part 1"}</div>
+                <div className="font-semibold text-[14px] mb-1" style={{ color: C.ink }}>{currentKey === "listening" ? currentListeningPart.title : currentKey === "reading" ? (currentReadingPart.title || `Part ${readingParts.indexOf(currentReadingPart) + 1}`) : currentKey === "speaking" && currentSpeakingPart ? currentSpeakingPart.title : "Part 1"}</div>
                 <div className="text-[13px]" style={{ color: C.muted }}>
-                  {sectionInstructionText(currentKey, currentKey === "writing" ? (writingTask === 1 ? writing.task1.minWords : writing.task2.minWords) : currentKey === "listening" ? listeningPartQuestions(currentListeningPart).length : flattenSectionQuestions(exam, currentKey).length)}
+                  {sectionInstructionText(currentKey, currentKey === "writing" ? (writingTask === 1 ? writing.task1.minWords : writing.task2.minWords) : currentKey === "listening" ? listeningPartQuestions(currentListeningPart).length : currentKey === "reading" ? currentReadingPart.questions.length : flattenSectionQuestions(exam, currentKey).length, currentKey === "reading" ? readingNumberOffset : 0)}
                 </div>
               </div>
             )}
@@ -6878,15 +6948,39 @@ style={{ backgroundColor: C.highlightBg, color: C.highlightText, borderRadius: "
                   </div>
                 )}
                 {currentKey === "reading" && (
-                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 lg:gap-8 flex-1 min-h-0">
-                    <div className="lg:h-full lg:overflow-y-auto lg:pr-2 pb-3">
-                      {(exam.sections.reading.paragraphs || []).length > 0 && (
-                        <ListOfParagraphs paragraphs={exam.sections.reading.paragraphs} />
-                      )}
-                      <HighlightablePassage text={readingPassageText(exam.sections.reading)} />
-                    </div>
-                    <div className="lg:h-full lg:overflow-y-auto lg:pl-6 lg:border-l pb-3" style={{ borderLeftColor: "var(--border-soft)" }}>
-                      <MCQBlock sectionKey="reading" questions={exam.sections.reading.questions} answers={answers.reading} setAnswers={(fn) => setAnswers((a) => ({ ...a, reading: fn(a.reading) }))} flagged={flagged} onToggleFlag={toggleFlag} />
+                  <div className="flex flex-col flex-1 min-h-0 gap-3">
+                    {readingParts.length > 1 && (
+                      <div className="flex items-center gap-2 flex-wrap shrink-0">
+                        {readingParts.map((part, pi) => (
+                          <button
+                            key={part.id}
+                            onClick={() => setReadingPartIdx(pi)}
+                            className="px-4 py-2 rounded-lg text-[13px] font-semibold transition-colors"
+                            style={{
+                              border: `1.5px solid ${readingParts.indexOf(currentReadingPart) === pi ? C.teal : C.border}`,
+                              backgroundColor: readingParts.indexOf(currentReadingPart) === pi ? C.tealSoft : C.card,
+                              color: readingParts.indexOf(currentReadingPart) === pi ? C.tealDeep : C.muted,
+                            }}
+                          >
+                            {part.title || `Part ${pi + 1}`}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 lg:gap-8 flex-1 min-h-0">
+                      <div className="lg:h-full lg:overflow-y-auto lg:pr-2 pb-3">
+                        {/* Har bir part matni mount holatda qoladi (faqat yashiriladi) — shunda
+                            student part'lar orasida o'tganda belgilagan highlight'lari yo'qolmaydi. */}
+                        {readingParts.map((part) => (
+                          <div key={part.id} style={{ display: part === currentReadingPart ? "block" : "none" }}>
+                            {(part.paragraphs || []).length > 0 && <ListOfParagraphs paragraphs={part.paragraphs} />}
+                            <HighlightablePassage text={readingPassageText(part)} />
+                          </div>
+                        ))}
+                      </div>
+                      <div className="lg:h-full lg:overflow-y-auto lg:pl-6 lg:border-l pb-3" style={{ borderLeftColor: "var(--border-soft)" }}>
+                        <MCQBlock sectionKey="reading" questions={currentReadingPart.questions} numberOffset={readingNumberOffset} answers={answers.reading} setAnswers={(fn) => setAnswers((a) => ({ ...a, reading: fn(a.reading) }))} flagged={flagged} onToggleFlag={toggleFlag} />
+                      </div>
                     </div>
                   </div>
                 )}
@@ -7002,6 +7096,14 @@ style={{ backgroundColor: C.highlightBg, color: C.highlightText, borderRadius: "
                       const targetPartIdx = listeningParts.findIndex((p) => p.questions.some((q) => q.id === qid));
                       if (targetPartIdx !== -1 && targetPartIdx !== listeningPartIdx) {
                         setListeningPartIdx(targetPartIdx);
+                        setTimeout(scroll, 50);
+                        return;
+                      }
+                    }
+                    if (currentKey === "reading") {
+                      const targetPartIdx = readingParts.findIndex((p) => p.questions.some((q) => q.id === qid));
+                      if (targetPartIdx !== -1 && targetPartIdx !== readingParts.indexOf(currentReadingPart)) {
+                        setReadingPartIdx(targetPartIdx);
                         setTimeout(scroll, 50);
                         return;
                       }
