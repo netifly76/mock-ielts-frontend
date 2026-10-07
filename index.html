@@ -6536,7 +6536,8 @@ style={{ backgroundColor: C.highlightBg, color: C.highlightText, borderRadius: "
       const [notepadText, setNotepadText] = useState("");
       const [fontLevel, setFontLevel] = useState(1);
       const [confirmExit, setConfirmExit] = useState(false);
-      const [sectionDeadlines, setSectionDeadlines] = useState({});
+      const [sectionDeadlines, setSectionDeadlines] = useState({}); // faqat HOZIR ochiq bo'limning tugash vaqti (absolute ms)
+      const [sectionLeft, setSectionLeft] = useState({}); // boshqa bo'limga o'tganda "muzlatilgan" qolgan vaqt (soniya) — { [key]: sec }
 
       useEffect(() => {
         let cancelled = false;
@@ -6557,6 +6558,7 @@ style={{ backgroundColor: C.highlightBg, color: C.highlightText, borderRadius: "
             setNotepadText(a.notepad_text || "");
             setFontLevel(a.font_level != null ? a.font_level : 1);
             setSectionDeadlines(a.section_deadlines || {});
+            setSectionLeft((a.progress_data && a.progress_data.sectionLeft) || {});
             setLoaded(true);
           } catch (e) {
             if (cancelled) return;
@@ -6653,7 +6655,7 @@ style={{ backgroundColor: C.highlightBg, color: C.highlightText, borderRadius: "
         notepad_text: notepadText,
         font_level: fontLevel,
         section_deadlines: sectionDeadlines,
-        progress_data: { writingTask, listeningPartIdx, readingPartIdx, speakingPartIdx, speaking: includeAudio ? speakingAudio : {} },
+        progress_data: { writingTask, listeningPartIdx, readingPartIdx, speakingPartIdx, sectionLeft, speaking: includeAudio ? speakingAudio : {} },
       });
 
       const submit = async () => {
@@ -6742,11 +6744,41 @@ style={{ backgroundColor: C.highlightBg, color: C.highlightText, borderRadius: "
            kirilganda o'rnatiladi). */
       const sectionMinutes = !isReview ? (exam.sections[currentKey]?.durationMinutes || DEFAULT_SECTION_MINUTES[currentKey] || 15) : 0;
       const expiredRef = useRef(false);
+      const speakingBusyRef = useRef(false);
+      speakingBusyRef.current = speakingBusy;
+      const prevSectionRef = useRef(null);
+      /* Bo'limga kirish/chiqish:
+         - bo'limdan CHIQQANDA (Keyingi/Oldingi/Review orqali) uning qolgan vaqti saqlab qo'yiladi
+           ("muzlatiladi") va deadline olib tashlanadi;
+         - bo'limga KIRGANDA: agar oldin qolgan vaqt saqlangan bo'lsa — shundan davom etadi
+           (to'liq vaqtga QAYTMAYDI); birinchi marta kirilsa — to'liq vaqt beriladi;
+           sahifa refresh bo'lib tiklangan bo'lsa — deadline allaqachon bor, o'zgartirilmaydi
+           (vaqt davom etaveradi).
+         `loaded` kutiladi: aks holda serverdan kelgan holat yuklanishi bu yozuvlarni o'chirib yuborardi. */
       useEffect(() => {
-        if (isReview) return;
-        expiredRef.current = false;
-        setSectionDeadlines((d) => (d[currentKey] ? d : { ...d, [currentKey]: Date.now() + sectionMinutes * 60000 }));
-      }, [idx]); // eslint-disable-line
+        if (!loaded) return;
+        const prev = prevSectionRef.current;
+        const cur = isReview ? null : currentKey;
+        if (prev === cur) return;
+        const now = Date.now();
+        if (prev && sectionDeadlines[prev]) {
+          const left = Math.max(0, Math.round((sectionDeadlines[prev] - now) / 1000));
+          setSectionLeft((l) => ({ ...l, [prev]: left }));
+        }
+        if (cur) {
+          expiredRef.current = false;
+          const savedLeft = sectionLeft[cur];
+          setSectionDeadlines((d) => {
+            const next = { ...d };
+            if (prev && prev !== cur) delete next[prev];
+            if (!next[cur]) next[cur] = now + (savedLeft != null ? savedLeft : sectionMinutes * 60) * 1000;
+            return next;
+          });
+        } else if (prev) {
+          setSectionDeadlines((d) => { const next = { ...d }; delete next[prev]; return next; });
+        }
+        prevSectionRef.current = cur;
+      }, [idx, loaded]); // eslint-disable-line
 
       const deadline = sectionDeadlines[currentKey];
       const [remaining, setRemaining] = useState(() => (deadline ? Math.max(0, Math.round((deadline - Date.now()) / 1000)) : sectionMinutes * 60));
@@ -6755,7 +6787,9 @@ style={{ backgroundColor: C.highlightBg, color: C.highlightText, borderRadius: "
         const tick = () => {
           const rem = Math.max(0, Math.round((deadline - Date.now()) / 1000));
           setRemaining(rem);
-          if (rem <= 0 && !expiredRef.current) {
+          /* Speaking'da mikrofon yozilayotgan bo'lsa, vaqt tugasa ham yozuv to'xtatilguncha kutiladi
+             (aks holda yozilayotgan javob yo'qolardi) — keyingi tick'da qayta tekshiriladi. */
+          if (rem <= 0 && !expiredRef.current && !speakingBusyRef.current) {
             expiredRef.current = true;
             toast("error", `${sectionLabel(currentKey)} vaqti tugadi — keyingi bo'limga o'tildi`);
             goNext();
@@ -6790,7 +6824,7 @@ style={{ backgroundColor: C.highlightBg, color: C.highlightText, borderRadius: "
           examApi.saveProgress(exam.id, latestStateRef.current).catch(() => { });
         }, 1200);
         return () => clearTimeout(saveTimerRef.current);
-      }, [loaded, idx, answers, writingText, writingTask, listeningPartIdx, readingPartIdx, speakingPartIdx, speakingAudio, flagged, notepadText, fontLevel, sectionDeadlines]); // eslint-disable-line
+      }, [loaded, idx, answers, writingText, writingTask, listeningPartIdx, readingPartIdx, speakingPartIdx, speakingAudio, flagged, notepadText, fontLevel, sectionDeadlines, sectionLeft]); // eslint-disable-line
 
       /* Komponent yo'q qilinganda (chiqishda) so'nggi holatni darhol (debounce'siz)
          yuboramiz — aks holda oxirgi 1.2 soniyadagi o'zgarish yo'qolib qolishi mumkin. */
@@ -6834,7 +6868,10 @@ style={{ backgroundColor: C.highlightBg, color: C.highlightText, borderRadius: "
       const wordCount1 = countWords(writingText.task1);
       const wordCount2 = countWords(writingText.task2);
       const fontScale = FONT_SCALES[fontLevel];
-      const timeLow = !isReview && remaining <= 60;
+      /* Yangi bo'limga o'tganda deadline bir lahza yo'q bo'ladi — shu paytda oldingi bo'lim
+         vaqti ko'rinib qolmasligi uchun saqlangan/to'liq vaqt ko'rsatiladi. */
+      const shownRemaining = deadline ? remaining : (sectionLeft[currentKey] != null ? sectionLeft[currentKey] : sectionMinutes * 60);
+      const timeLow = !isReview && shownRemaining <= 60;
 
       if (!loaded) {
         return (
@@ -6857,7 +6894,7 @@ style={{ backgroundColor: C.highlightBg, color: C.highlightText, borderRadius: "
             <div className="flex items-center gap-3 shrink-0">
               {!isReview && (
                 <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg f-mono text-[13px] font-bold" style={{ backgroundColor: timeLow ? "rgba(194,74,63,0.25)" : "rgba(255,255,255,0.08)", color: timeLow ? "#F2A8A0" : "#fff" }}>
-                  <Icon name="clock" size={13} /> {fmtClock(remaining)}
+                  <Icon name="clock" size={13} /> {fmtClock(shownRemaining)}
                 </div>
               )}
               <div className="hidden sm:flex gap-1">
