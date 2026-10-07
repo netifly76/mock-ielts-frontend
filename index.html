@@ -6035,7 +6035,7 @@ style={{ backgroundColor: C.highlightBg, color: C.highlightText, borderRadius: "
                 </div>
                 {q.imageUrl && (
                   <div className="mb-2.5">
-                    <img src={q.imageUrl} alt={q.imageName || "Savol rasmi"} className="max-w-full max-h-80 rounded-lg" style={{ border: `1px solid ${C.borderSoft}` }} />
+                    <BlobImg src={q.imageUrl} alt={q.imageName || "Savol rasmi"} className="max-w-full max-h-80 rounded-lg" style={{ border: `1px solid ${C.borderSoft}` }} />
                   </div>
                 )}
                 <div className="space-y-1.5">
@@ -6442,6 +6442,7 @@ style={{ backgroundColor: C.highlightBg, color: C.highlightText, borderRadius: "
                       <Icon name={sectionIcon(key)} size={15} style={{ color: C.teal }} /> {sectionLabel(key)}
                     </div>
                   </div>
+                  {!parts.length && <div className="text-[12.5px]" style={{ color: C.mutedSoft }}>Savol kiritilmagan</div>}
                   <div className="flex flex-wrap gap-2">
                     {parts.map((part) => {
                       const rec = speakingAudio && speakingAudio[part.id];
@@ -6509,8 +6510,92 @@ style={{ backgroundColor: C.highlightBg, color: C.highlightText, borderRadius: "
       return `${String(m).padStart(2, "0")}:${String(r).padStart(2, "0")}`;
     }
 
+    /* ===== Tezlik uchun yordamchilar ===== */
+    /* Audio/rasmlar mock ichida base64 "data:" URL ko'rinishida saqlanadi (bir necha MB bo'lishi mumkin).
+       Ularni to'g'ridan-to'g'ri <audio src>/<img src>/<a href> ga berish — bo'limga har qaytilganda
+       katta matnni DOMga qayta yozish va qayta dekodlash demak (sayt qotadi). Shuning uchun data URL
+       BIR MARTA Blob'ga aylantirilib, qisqa blob: havola ishlatiladi (keshlanadi). */
+    const _blobUrlCache = new Map();
+    function toBlobUrl(url) {
+      if (!url || typeof url !== "string" || !url.startsWith("data:")) return url;
+      const hit = _blobUrlCache.get(url);
+      if (hit) return hit;
+      try {
+        const comma = url.indexOf(",");
+        const meta = url.slice(5, comma);
+        const isB64 = /;base64$/i.test(meta);
+        const mime = meta.replace(/;base64$/i, "") || "application/octet-stream";
+        const raw = url.slice(comma + 1);
+        let bytes;
+        if (isB64) {
+          const bin = atob(raw);
+          bytes = new Uint8Array(bin.length);
+          for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        } else {
+          bytes = new TextEncoder().encode(decodeURIComponent(raw));
+        }
+        const blobUrl = URL.createObjectURL(new Blob([bytes], { type: mime }));
+        _blobUrlCache.set(url, blobUrl);
+        return blobUrl;
+      } catch (e) {
+        return url;
+      }
+    }
+    function useBlobUrl(url) {
+      return useMemo(() => toBlobUrl(url), [url]);
+    }
+    const ExamAudio = React.memo(function ExamAudio({ src, shared }) {
+      const url = useBlobUrl(src);
+      return (
+        <div className="flex items-center gap-2 rounded-lg p-3" style={{ backgroundColor: C.paperDim }}>
+          <Icon name="volume-high" size={16} style={{ color: C.teal }} />
+          <audio controls preload="metadata" src={url} className="w-full" />
+          {shared && <span className="text-[11.5px] shrink-0" style={{ color: C.mutedSoft }}>Umumiy audio</span>}
+          <a href={url} download="listening-audio.mp3" title="Audioni yuklab olish" className="shrink-0 p-1.5 rounded-lg" style={{ color: C.teal }}>
+            <Icon name="download" size={15} />
+          </a>
+        </div>
+      );
+    });
+    const BlobImg = React.memo(function BlobImg({ src, alt, className, style }) {
+      const url = useBlobUrl(src);
+      return <img src={url} alt={alt} className={className} style={style} decoding="async" loading="lazy" />;
+    });
+
+    /* Taymer alohida komponent — har soniyada faqat shu kichik qism qayta chiziladi.
+       Oldin taymer butun ExamRunner'ni (matn, savollar, hammasi) har soniya qayta chizardi. */
+    function SectionTimer({ deadline, fallbackSeconds, onExpire }) {
+      const calc = () => Math.max(0, Math.round((deadline - Date.now()) / 1000));
+      const [remaining, setRemaining] = useState(() => (deadline ? calc() : fallbackSeconds));
+      const onExpireRef = useRef(onExpire);
+      onExpireRef.current = onExpire;
+      useEffect(() => {
+        if (!deadline) return;
+        const tick = () => {
+          const rem = Math.max(0, Math.round((deadline - Date.now()) / 1000));
+          setRemaining(rem);
+          if (rem <= 0 && onExpireRef.current) onExpireRef.current();
+        };
+        tick();
+        const t = setInterval(tick, 1000);
+        return () => clearInterval(t);
+      }, [deadline]);
+      const shown = deadline ? remaining : fallbackSeconds;
+      const low = shown <= 60;
+      return (
+        <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg f-mono text-[13px] font-bold" style={{ backgroundColor: low ? "rgba(194,74,63,0.25)" : "rgba(255,255,255,0.08)", color: low ? "#F2A8A0" : "#fff" }}>
+          <Icon name="clock" size={13} /> {fmtClock(shown)}
+        </div>
+      );
+    }
+
+    /* Og'ir komponentlar — props o'zgarmasa qayta chizilmaydi. */
+    const HighlightablePassageM = React.memo(HighlightablePassage);
+    const ListOfParagraphsM = React.memo(ListOfParagraphs);
+    const MCQBlockM = React.memo(MCQBlock);
+
     function ExamRunner({ exam, student, onExit, onSubmit, toast }) {
-      const sectionKeys = useMemo(() => orderedSectionEntries(exam.sections).filter(([k, v]) => v.enabled && (k !== "speaking" || speakingPlayableParts(v).length > 0)).map(([k]) => k), [exam]);
+      const sectionKeys = useMemo(() => orderedSectionEntries(exam.sections).filter(([, v]) => v.enabled).map(([k]) => k), [exam]); // yoqilgan har bir bo'lim ochiladi — savoli bo'lmasa ham
 
       /* Avvalgi (tugallanmagan) urinish bormi — endi backend'dagi ExamAttempt
          orqali tekshiriladi (examApi.start: mavjud bo'lsa qaytaradi, bo'lmasa
@@ -6601,10 +6686,14 @@ style={{ backgroundColor: C.highlightBg, color: C.highlightText, borderRadius: "
       const isReview = idx >= sectionKeys.length;
       const currentKey = sectionKeys[idx];
 
-      const toggleFlag = (sectionKey, qid) => {
+      const toggleFlag = useCallback((sectionKey, qid) => {
         const key = `${sectionKey}:${qid}`;
         setFlagged((f) => ({ ...f, [key]: !f[key] }));
-      };
+      }, []);
+      /* Barqaror (har renderda o'zgarmaydigan) setter'lar — shunda React.memo ishlaydi. */
+      const setListeningAnswers = useCallback((fn) => setAnswers((a) => ({ ...a, listening: fn(a.listening) })), []);
+      const setReadingAnswers = useCallback((fn) => setAnswers((a) => ({ ...a, reading: fn(a.reading) })), []);
+      const setVocabAnswers = useCallback((fn) => setAnswers((a) => ({ ...a, vocabulary: fn(a.vocabulary) })), []);
 
       const goNext = useCallback(() => setIdx((i) => Math.min(i + 1, sectionKeys.length)), [sectionKeys.length]);
 
@@ -6681,7 +6770,7 @@ style={{ backgroundColor: C.highlightBg, color: C.highlightText, borderRadius: "
         const wrongCount = allReview.length - correctCount - unansweredCount;
         const accuracy = allReview.length ? Math.round((correctCount / allReview.length) * 100) : null;
 
-        const reviewSpeaking = sectionKeys.includes("speaking")
+        const reviewSpeaking = sectionKeys.includes("speaking") && speakingPlayableParts(exam.sections.speaking).length > 0
           ? speakingPlayableParts(exam.sections.speaking).map((part) => {
               const rec = speakingAudio[part.id];
               return {
@@ -6781,24 +6870,14 @@ style={{ backgroundColor: C.highlightBg, color: C.highlightText, borderRadius: "
       }, [idx, loaded]); // eslint-disable-line
 
       const deadline = sectionDeadlines[currentKey];
-      const [remaining, setRemaining] = useState(() => (deadline ? Math.max(0, Math.round((deadline - Date.now()) / 1000)) : sectionMinutes * 60));
-      useEffect(() => {
-        if (isReview || !deadline) return;
-        const tick = () => {
-          const rem = Math.max(0, Math.round((deadline - Date.now()) / 1000));
-          setRemaining(rem);
-          /* Speaking'da mikrofon yozilayotgan bo'lsa, vaqt tugasa ham yozuv to'xtatilguncha kutiladi
-             (aks holda yozilayotgan javob yo'qolardi) — keyingi tick'da qayta tekshiriladi. */
-          if (rem <= 0 && !expiredRef.current && !speakingBusyRef.current) {
-            expiredRef.current = true;
-            toast("error", `${sectionLabel(currentKey)} vaqti tugadi — keyingi bo'limga o'tildi`);
-            goNext();
-          }
-        };
-        tick();
-        const t = setInterval(tick, 1000);
-        return () => clearInterval(t);
-      }, [isReview, deadline, currentKey]); // eslint-disable-line
+      /* Vaqt tugaganda chaqiriladi (SectionTimer har soniya tekshiradi).
+         Speaking'da mikrofon yozilayotgan bo'lsa, yozuv to'xtatilguncha kutiladi. */
+      const handleExpire = () => {
+        if (expiredRef.current || speakingBusyRef.current || isReview) return;
+        expiredRef.current = true;
+        toast("error", `${sectionLabel(currentKey)} vaqti tugadi — keyingi bo'limga o'tildi`);
+        goNext();
+      };
 
       /* Autosave: javoblar, joriy bo'lim va bo'lim deadline'lari har o'zgarishda
          backend'ga (ExamAttempt) yoziladi — refresh/tab yopilish yoki boshqa
@@ -6845,10 +6924,11 @@ style={{ backgroundColor: C.highlightBg, color: C.highlightText, borderRadius: "
       }, []);
 
       const writing = normalizeWriting(exam.sections.writing);
-      const listeningParts = getListeningPartsWithAudio(exam.sections.listening);
+      const listeningParts = useMemo(() => getListeningPartsWithAudio(exam.sections.listening), [exam]);
       const currentListeningPart = listeningParts[Math.min(listeningPartIdx, listeningParts.length - 1)] || listeningParts[0];
+      const currentListeningQuestions = useMemo(() => listeningPartQuestions(currentListeningPart), [currentListeningPart]);
       const listeningNumberOffset = listeningParts.slice(0, listeningParts.indexOf(currentListeningPart)).reduce((sum, p) => sum + listeningPartQuestions(p).length, 0);
-      const readingParts = getReadingParts(exam.sections.reading);
+      const readingParts = useMemo(() => getReadingParts(exam.sections.reading), [exam]);
       const currentReadingPart = readingParts[Math.min(readingPartIdx, readingParts.length - 1)] || readingParts[0];
       const readingNumberOffset = readingParts.slice(0, readingParts.indexOf(currentReadingPart)).reduce((sum, p) => sum + p.questions.length, 0);
       const speakingParts = speakingPlayableParts(exam.sections.speaking);
@@ -6868,10 +6948,8 @@ style={{ backgroundColor: C.highlightBg, color: C.highlightText, borderRadius: "
       const wordCount1 = countWords(writingText.task1);
       const wordCount2 = countWords(writingText.task2);
       const fontScale = FONT_SCALES[fontLevel];
-      /* Yangi bo'limga o'tganda deadline bir lahza yo'q bo'ladi — shu paytda oldingi bo'lim
-         vaqti ko'rinib qolmasligi uchun saqlangan/to'liq vaqt ko'rsatiladi. */
-      const shownRemaining = deadline ? remaining : (sectionLeft[currentKey] != null ? sectionLeft[currentKey] : sectionMinutes * 60);
-      const timeLow = !isReview && shownRemaining <= 60;
+      /* Yangi bo'limga o'tganda deadline bir lahza yo'q bo'ladi — shu paytda saqlangan/to'liq vaqt ko'rsatiladi. */
+      const timerFallback = sectionLeft[currentKey] != null ? sectionLeft[currentKey] : sectionMinutes * 60;
 
       if (!loaded) {
         return (
@@ -6893,9 +6971,7 @@ style={{ backgroundColor: C.highlightBg, color: C.highlightText, borderRadius: "
             <div className="f-display text-[14px] md:text-[15px] font-semibold text-white truncate">{exam.title}</div>
             <div className="flex items-center gap-3 shrink-0">
               {!isReview && (
-                <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg f-mono text-[13px] font-bold" style={{ backgroundColor: timeLow ? "rgba(194,74,63,0.25)" : "rgba(255,255,255,0.08)", color: timeLow ? "#F2A8A0" : "#fff" }}>
-                  <Icon name="clock" size={13} /> {fmtClock(shownRemaining)}
-                </div>
+                <SectionTimer deadline={deadline} fallbackSeconds={timerFallback} onExpire={handleExpire} />
               )}
               <div className="hidden sm:flex gap-1">
                 {sectionKeys.map((k, i) => (
@@ -6976,21 +7052,14 @@ style={{ backgroundColor: C.highlightBg, color: C.highlightText, borderRadius: "
                       </div>
                     )}
                     {currentListeningPart.audioUrl ? (
-                      <div className="flex items-center gap-2 rounded-lg p-3" style={{ backgroundColor: C.paperDim }}>
-                        <Icon name="volume-high" size={16} style={{ color: C.teal }} />
-                        <audio controls src={currentListeningPart.audioUrl} className="w-full" />
-                        {currentListeningPart.audioShared && <span className="text-[11.5px] shrink-0" style={{ color: C.mutedSoft }}>Umumiy audio</span>}
-                        <a href={currentListeningPart.audioUrl} download="listening-audio.mp3" title="Audioni yuklab olish" className="shrink-0 p-1.5 rounded-lg" style={{ color: C.teal }}>
-                          <Icon name="download" size={15} />
-                        </a>
-                      </div>
+                      <ExamAudio key={currentListeningPart.id} src={currentListeningPart.audioUrl} shared={currentListeningPart.audioShared} />
                     ) : (
                       <div className="flex items-center gap-2 text-[13px] rounded-lg p-3" style={{ backgroundColor: C.paperDim, color: C.muted }}>
                         <Icon name="volume-high" size={16} /> Audio biriktirilmagan — matn asosida javob bering
                       </div>
                     )}
                     <p className="text-[13px] whitespace-pre-wrap" style={{ color: C.muted }}><RichText text={exam.sections.listening.instructions} /></p>
-                    <MCQBlock sectionKey="listening" questions={listeningPartQuestions(currentListeningPart)} numberOffset={listeningNumberOffset} answers={answers.listening} setAnswers={(fn) => setAnswers((a) => ({ ...a, listening: fn(a.listening) }))} flagged={flagged} onToggleFlag={toggleFlag} />
+                    <MCQBlockM sectionKey="listening" questions={currentListeningQuestions} numberOffset={listeningNumberOffset} answers={answers.listening} setAnswers={setListeningAnswers} flagged={flagged} onToggleFlag={toggleFlag} />
                   </div>
                 )}
                 {currentKey === "reading" && (
@@ -7019,13 +7088,13 @@ style={{ backgroundColor: C.highlightBg, color: C.highlightText, borderRadius: "
                             student part'lar orasida o'tganda belgilagan highlight'lari yo'qolmaydi. */}
                         {readingParts.map((part) => (
                           <div key={part.id} style={{ display: part === currentReadingPart ? "block" : "none" }}>
-                            {(part.paragraphs || []).length > 0 && <ListOfParagraphs paragraphs={part.paragraphs} />}
-                            <HighlightablePassage text={readingPassageText(part)} />
+                            {(part.paragraphs || []).length > 0 && <ListOfParagraphsM paragraphs={part.paragraphs} />}
+                            <HighlightablePassageM text={readingPassageText(part)} />
                           </div>
                         ))}
                       </div>
                       <div className="lg:h-full lg:overflow-y-auto lg:pl-6 lg:border-l pb-3" style={{ borderLeftColor: "var(--border-soft)" }}>
-                        <MCQBlock sectionKey="reading" questions={currentReadingPart.questions} numberOffset={readingNumberOffset} answers={answers.reading} setAnswers={(fn) => setAnswers((a) => ({ ...a, reading: fn(a.reading) }))} flagged={flagged} onToggleFlag={toggleFlag} />
+                        <MCQBlockM sectionKey="reading" questions={currentReadingPart.questions} numberOffset={readingNumberOffset} answers={answers.reading} setAnswers={setReadingAnswers} flagged={flagged} onToggleFlag={toggleFlag} />
                       </div>
                     </div>
                   </div>
@@ -7079,6 +7148,11 @@ style={{ backgroundColor: C.highlightBg, color: C.highlightText, borderRadius: "
                     </div>
                   </div>
                 )}
+                {currentKey === "speaking" && !currentSpeakingPart && (
+                  <div className="rounded-lg p-4 text-[13px] text-center" style={{ backgroundColor: C.paperDim, color: C.muted }}>
+                    Bu bo'limga hozircha savol kiritilmagan. Davom etish uchun "Keyingi" tugmasini bosing.
+                  </div>
+                )}
                 {currentKey === "speaking" && currentSpeakingPart && (
                   <div className="space-y-4">
                     {speakingParts.length > 1 && (
@@ -7117,7 +7191,7 @@ style={{ backgroundColor: C.highlightBg, color: C.highlightText, borderRadius: "
                   </div>
                 )}
                 {currentKey === "vocabulary" && (
-                  <MCQBlock sectionKey="vocabulary" questions={exam.sections.vocabulary.questions} answers={answers.vocabulary} setAnswers={(fn) => setAnswers((a) => ({ ...a, vocabulary: fn(a.vocabulary) }))} flagged={flagged} onToggleFlag={toggleFlag} />
+                  <MCQBlockM sectionKey="vocabulary" questions={exam.sections.vocabulary.questions} answers={answers.vocabulary} setAnswers={setVocabAnswers} flagged={flagged} onToggleFlag={toggleFlag} />
                 )}
               </Card>
             )}
