@@ -3267,6 +3267,15 @@
     /* Reading bo'limi ham Listening kabi part'larga bo'linadi (cheksiz). Har bir part
        o'zining matni (paragraflar), va savollariga ega. Eski (parts'siz) mock'lar —
        passage/paragraphs/questions bo'lim darajasida edi — bitta part sifatida o'qiladi. */
+    /* Bo'limlar tartibi HAR DOIM shunday: Listening → Reading → Writing → Speaking
+       (Vocabulary bo'lsa, oxirida). Bo'lim o'chirilgan bo'lsa, qolganlari tartibni
+       buzmasdan bitta oldinga suriladi. Object kalitlari tartibiga tayanilmaydi. */
+    const SECTION_ORDER = ["listening", "reading", "writing", "speaking", "vocabulary"];
+    function orderedSectionEntries(sections) {
+      const rank = (k) => { const i = SECTION_ORDER.indexOf(k); return i === -1 ? SECTION_ORDER.length : i; };
+      return Object.entries(sections || {}).sort((a, b) => rank(a[0]) - rank(b[0]));
+    }
+
     function getReadingParts(reading) {
       const r = reading || {};
       if (Array.isArray(r.parts) && r.parts.length) {
@@ -4607,7 +4616,7 @@ const addPart = () => setSections((s) => ({ ...s, listening: { ...s.listening, p
 
           <div className="space-y-3">
             {exams.map((e) => {
-              const enabledSections = Object.entries(e.sections).filter(([, v]) => v.enabled).map(([k]) => k);
+              const enabledSections = orderedSectionEntries(e.sections).filter(([, v]) => v.enabled).map(([k]) => k);
               return (
                 <Card key={e.id}>
                   {/* Mobil: faqat asosiy ma'lumotlar — sarlavha, status, ON/OFF va amallar menyusi */}
@@ -6501,7 +6510,7 @@ style={{ backgroundColor: C.highlightBg, color: C.highlightText, borderRadius: "
     }
 
     function ExamRunner({ exam, student, onExit, onSubmit, toast }) {
-      const sectionKeys = useMemo(() => Object.entries(exam.sections).filter(([k, v]) => v.enabled && (k !== "speaking" || speakingPlayableParts(v).length > 0)).map(([k]) => k), [exam]);
+      const sectionKeys = useMemo(() => orderedSectionEntries(exam.sections).filter(([k, v]) => v.enabled && (k !== "speaking" || speakingPlayableParts(v).length > 0)).map(([k]) => k), [exam]);
 
       /* Avvalgi (tugallanmagan) urinish bormi — endi backend'dagi ExamAttempt
          orqali tekshiriladi (examApi.start: mavjud bo'lsa qaytaradi, bo'lmasa
@@ -7243,7 +7252,7 @@ style={{ backgroundColor: C.highlightBg, color: C.highlightText, borderRadius: "
                   <Badge tone={open ? "success" : "muted"}>{open ? "Ochiq" : "Yopiq"}</Badge>
                 </div>
                 <div className="flex items-center gap-3 mt-3 flex-wrap">
-                  {Object.entries(e.sections).filter(([, v]) => v.enabled).map(([k]) => {
+                  {orderedSectionEntries(e.sections).filter(([, v]) => v.enabled).map(([k]) => {
                     return <span key={k} className="flex items-center gap-1 text-[12px]" style={{ color: C.muted }}><Icon name={sectionIcon(k)} size={13} /> {sectionLabel(k)}</span>;
                   })}
                 </div>
